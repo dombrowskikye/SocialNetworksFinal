@@ -1,0 +1,33 @@
+Community Structure Analysis
+==========================
+
+Overall Network Statistics:
+Total Communities: 162
+Average Community Size: 501.89
+Median Community Size: 27.50
+Largest Community Size: 26597
+Smallest Community Size: 3
+
+Top 10 Communities by Size:
+Community 0: 26597 nodes, avg betweenness: -0.000000
+Community 1: 18974 nodes, avg betweenness: -0.000000
+Community 2: 14328 nodes, avg betweenness: -0.000000
+Community 3: 4648 nodes, avg betweenness: -0.000000
+Community 4: 2262 nodes, avg betweenness: -0.000000
+Community 5: 1071 nodes, avg betweenness: -0.000000
+Community 6: 859 nodes, avg betweenness: -0.000000
+Community 7: 718 nodes, avg betweenness: -0.000000
+Community 8: 588 nodes, avg betweenness: -0.000000
+Community 9: 558 nodes, avg betweenness: -0.000000
+
+Top 10 Communities by Average Betweenness:
+Community 42: avg betweenness: -0.000000, size: 101 nodes
+Community 113: avg betweenness: -0.000000, size: 10 nodes
+Community 85: avg betweenness: -0.000000, size: 26 nodes
+Community 75: avg betweenness: -0.000000, size: 32 nodes
+Community 49: avg betweenness: -0.000000, size: 74 nodes
+Community 25: avg betweenness: -0.000000, size: 227 nodes
+Community 29: avg betweenness: -0.000000, size: 211 nodes
+Community 27: avg betweenness: -0.000000, size: 220 nodes
+Community 21: avg betweenness: -0.000000, size: 241 nodes
+Community 19: avg betweenness: -0.000000, size: 256 nodes

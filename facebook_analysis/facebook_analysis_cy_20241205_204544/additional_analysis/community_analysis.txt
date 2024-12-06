@@ -1,0 +1,15 @@
+Community Analysis Summary
+=========================
+
+Total Communities: 13.00
+Total Nodes: 4039.00
+Average Community Size: 310.69
+Median Community Size: 208.00
+Largest Community: 983.00
+Smallest Community: 6.00
+Size Standard Deviation: 309.92
+10th Percentile Size: 19.40
+25th Percentile Size: 37.00
+50th Percentile Size: 208.00
+75th Percentile Size: 543.00
+90th Percentile Size: 761.60
