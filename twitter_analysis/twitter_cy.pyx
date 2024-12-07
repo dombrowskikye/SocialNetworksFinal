@@ -18,12 +18,12 @@ from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 
 # Type declarations
-ctypedef np.npy_int DTYPE_t
-ctypedef np.npy_float64 DTYPE_float_t
+ctypedef int DTYPE_t
+ctypedef double DTYPE_float_t
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def read_twitter_network_cy(str filename):
+def read_network_cy(str filename):
     cdef:
         list edges = []
         int follower, followed
@@ -37,74 +37,53 @@ def read_twitter_network_cy(str filename):
                 except ValueError:
                     continue
     
-    return nx.DiGraph(edges)
+    return nx.DiGraph(edges)  # Using directed graph for Twitter
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def parallel_edge_betweenness_centrality(G, int num_workers=4):
+def _single_source_shortest_path_basic(G, s):
     cdef:
-        dict edge_betweenness = defaultdict(float)
-        list nodes = list(G.nodes())
-        int n_nodes = len(nodes)
-        int chunk_size
-    
-    chunk_size = max(1, n_nodes // num_workers)
-    node_chunks = [nodes[i:i + chunk_size] for i in range(0, n_nodes, chunk_size)]
-    
-    def process_chunk(nodes_chunk):
-        chunk_betweenness = defaultdict(float)
-        for s in nodes_chunk:
-            pred, sigma, d = _single_source_shortest_path_basic(G, s)
-            betweenness = _accumulate_edges(G, s, pred, sigma, d)
-            for edge, value in betweenness.items():
-                chunk_betweenness[edge] += value
-        return dict(chunk_betweenness)
-    
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        chunk_results = list(executor.map(process_chunk, node_chunks))
-    
-    for chunk_result in chunk_results:
-        for edge, value in chunk_result.items():
-            edge_betweenness[edge] += value
-    
-    cdef float scale = 1.0 / (n_nodes * (n_nodes - 1))
-    for edge in edge_betweenness:
-        edge_betweenness[edge] *= scale
-    
-    return dict(edge_betweenness)
-
-@cython.boundscheck(False)
-@cython.wraparound(False)
-cdef _single_source_shortest_path_basic(G, s):
-    cdef:
-        dict pred = {s: []}
-        dict sigma = defaultdict(float)
-        dict d = {s: 0}
+        dict pred = dict({s: []})  # Convert to regular dict
+        dict sigma = dict()        # Initialize as regular dict
+        dict d = dict({s: 0})      # Convert to regular dict
         list queue = [s]
-        int v, w
     
     sigma[s] = 1.0
     while queue:
         v = queue.pop(0)
-        for w in G[v]:
+        # Convert G[v] to regular dict if it's a defaultdict
+        neighbors = dict(G[v]) if isinstance(G[v], defaultdict) else G[v]
+        for w in neighbors:
             if w not in d:
                 queue.append(w)
                 d[w] = d[v] + 1
             if d[w] == d[v] + 1:
+                if w not in sigma:
+                    sigma[w] = 0.0
                 sigma[w] += sigma[v]
                 if w not in pred:
                     pred[w] = []
                 pred[w].append(v)
     
-    return pred, dict(sigma), d
+    return pred, sigma, d
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-cdef _accumulate_edges(G, s, dict pred, dict sigma, dict d):
+def _accumulate_edges(G, s, dict pred, dict sigma, dict d):
     cdef:
-        dict betweenness = defaultdict(float)
-        dict delta = defaultdict(float)
-        list stack = sorted(pred.keys(), key=lambda x: -d[x])
+        dict betweenness = dict()  # Initialize as regular dict
+        dict delta = dict()        # Initialize as regular dict
+        list stack
+    
+    # Convert to regular dict if needed
+    pred = dict(pred)
+    sigma = dict(sigma)
+    d = dict(d)
+    
+    stack = sorted(pred.keys(), key=lambda x: -d[x])
+    
+    for node in pred:
+        delta[node] = 0.0
     
     for w in stack:
         coefficient = (1.0 + delta[w]) / sigma[w]
@@ -112,9 +91,59 @@ cdef _accumulate_edges(G, s, dict pred, dict sigma, dict d):
             edge = tuple(sorted([v, w]))
             c = sigma[v] * coefficient
             delta[v] += c
+            if edge not in betweenness:
+                betweenness[edge] = 0.0
             betweenness[edge] += c
     
-    return dict(betweenness)
+    return betweenness
+
+def process_chunk(args):
+    G, nodes_chunk = args
+    # Convert G to regular dict if needed
+    if isinstance(G, nx.Graph):
+        G = nx.Graph(dict(G.adj))
+    elif isinstance(G, nx.DiGraph):
+        G = nx.DiGraph(dict(G.adj))
+    
+    local_betweenness = {}
+    for s in nodes_chunk:
+        pred, sigma, d = _single_source_shortest_path_basic(G, s)
+        betweenness = _accumulate_edges(G, s, pred, sigma, d)
+        for edge, value in betweenness.items():
+            if edge not in local_betweenness:
+                local_betweenness[edge] = 0.0
+            local_betweenness[edge] += value
+    return local_betweenness
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def parallel_edge_betweenness_centrality(G, int num_workers=4):
+    cdef:
+        dict edge_betweenness = {}
+        list nodes = list(G.nodes())
+        int n_nodes = len(nodes)
+        int chunk_size
+    
+    chunk_size = max(1, n_nodes // num_workers)
+    node_chunks = [nodes[i:i + chunk_size] for i in range(0, n_nodes, chunk_size)]
+    
+    # Create argument tuples for process_chunk
+    chunk_args = [(G, chunk) for chunk in node_chunks]
+    
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        chunk_results = list(executor.map(process_chunk, chunk_args))
+    
+    for chunk_result in chunk_results:
+        for edge, value in chunk_result.items():
+            if edge not in edge_betweenness:
+                edge_betweenness[edge] = 0.0
+            edge_betweenness[edge] += value
+    
+    cdef float scale = 1.0 / (n_nodes * (n_nodes - 1))
+    for edge in edge_betweenness:
+        edge_betweenness[edge] *= scale
+    
+    return edge_betweenness
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
@@ -124,9 +153,11 @@ def parallel_girvan_newman(G, max_communities=None, int num_workers=4):
     
     if max_communities is not None:
         n_communities = max_communities
-        
+    
+    # Convert to undirected and ensure regular dict
     if not isinstance(G, nx.Graph):
         G = G.to_undirected()
+    G = nx.Graph(dict(G.adj))
     
     g = G.copy()
     removed_edges = []
@@ -144,75 +175,6 @@ def parallel_girvan_newman(G, max_communities=None, int num_workers=4):
                 break
     
     return communities, removed_edges
-
-@cython.boundscheck(False)
-@cython.wraparound(False)
-def calculate_betweenness_sample_cy(G, int k, bint normalized=True, int seed=-1):
-    cdef:
-        dict betweenness
-        list nodes, pivots
-        int n, i
-        float norm
-        dict paths
-    
-    betweenness = {node: 0.0 for node in G}
-    nodes = list(G.nodes())
-    n = len(nodes)
-    
-    if seed >= 0:
-        np.random.seed(seed)
-    
-    pivots = list(np.random.choice(nodes, min(k, n), replace=False))
-    
-    for pivot in tqdm(pivots, desc="Computing betweenness"):
-        paths = dict(nx.single_source_shortest_path_length(G, pivot))
-        for node in paths:
-            if node != pivot:
-                betweenness[node] += 1.0 / len(pivots)
-    
-    if normalized and n > 2:
-        norm = 1.0 / ((n - 1) * (n - 2))
-        for node in betweenness:
-            betweenness[node] *= norm
-    
-    return betweenness
-
-@cython.boundscheck(False)
-@cython.wraparound(False)
-def efficient_layout_cy(G, float k=-1.0, int iterations=50, int seed=42):
-    cdef:
-        int n = G.number_of_nodes()
-        dict pos, displacement
-        float temperature = 0.1
-        int i, j
-        float distance, length
-        np.ndarray delta
-    
-    if k < 0:
-        k = 1.0 / sqrt(n)
-    
-    np.random.seed(seed)
-    pos = {node: np.random.rand(2) for node in G}
-    
-    for i in range(iterations):
-        displacement = {node: np.zeros(2) for node in G}
-        
-        # Calculate forces
-        for node1 in G:
-            for node2 in G:
-                if node1 != node2:
-                    delta = pos[node1] - pos[node2]
-                    distance = max(0.01, np.sqrt(np.sum(delta ** 2)))
-                    displacement[node1] += k * k / distance * delta
-        
-        # Update positions
-        for node in G:
-            length = max(0.01, np.sqrt(np.sum(displacement[node] ** 2)))
-            pos[node] += displacement[node] / length * min(length, temperature)
-        
-        temperature *= 0.95
-    
-    return pos
 
 def create_output_directory():
     timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -232,11 +194,7 @@ def plot_network_visualization_cy(G, dict bt_centrality, list communities, outpu
     
     plt.figure(figsize=(15, 15))
     
-    try:
-        pos = efficient_layout_cy(G_undirected, iterations=50)
-    except Exception as e:
-        print(f"Layout calculation failed: {e}")
-        return
+    pos = nx.spring_layout(G_undirected)
     
     node_sizes = [bt_centrality.get(node, 0) * 5000 + 100 for node in G_sub.nodes()]
     community_colors = {}
@@ -272,21 +230,21 @@ def analyze_network_cy(str filename, str community_method="girvan_newman", max_c
     print("Starting Cython-optimized analysis...")
     output_dir = create_output_directory()
     
-    G = read_twitter_network_cy(filename)
+    G = read_network_cy(filename)
     print(f"Network loaded in {time.time() - start_time:.2f} seconds")
     
     stats = {
         "nodes": G.number_of_nodes(),
         "edges": G.number_of_edges(),
-        "components": nx.number_weakly_connected_components(G)
+        "components": nx.number_weakly_connected_components(G)  # Changed for directed graph
     }
     print("\nNetwork Statistics:")
     for key, value in stats.items():
         print(f"{key}: {value}")
     
-    print("\nCalculating approximate betweenness centrality...")
+    print("\nCalculating betweenness centrality...")
     bt_start = time.time()
-    bt_centrality = calculate_betweenness_sample_cy(G, k=100, normalized=True, seed=42)
+    bt_centrality = nx.betweenness_centrality(G)
     print(f"Betweenness centrality calculated in {time.time() - bt_start:.2f} seconds")
     
     with open(output_dir / 'betweenness_centrality.json', 'w') as f:
@@ -295,12 +253,11 @@ def analyze_network_cy(str filename, str community_method="girvan_newman", max_c
     print("\nDetecting communities...")
     comm_start = time.time()
     if community_method == "girvan_newman":
-        communities, removed_edges = parallel_girvan_newman(G.to_undirected(), n_communities)
-        # Save removed edges for potential reconstruction
+        communities, removed_edges = parallel_girvan_newman(G, n_communities)
         with open(output_dir / 'removed_edges.pickle', 'wb') as f:
             pickle.dump(removed_edges, f)
     else:
-        communities = list(nx.community.greedy_modularity_communities(G.to_undirected()))
+        communities = list(nx.community.greedy_modularity_communities(G))
     
     print(f"Communities detected in {time.time() - comm_start:.2f} seconds")
     print(f"Number of communities found: {len(communities)}")

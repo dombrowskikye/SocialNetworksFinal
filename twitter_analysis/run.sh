@@ -7,26 +7,64 @@ set -e
 
 echo "Setting up Twitter Network Analysis Environment..."
 
-# Check if python and pip are installed
-if ! command -v python3 &> /dev/null; then
-    echo "Python3 is not installed. Please install Python3 first."
-    exit 1
+# Function to check and install Python 3.11
+install_python311() {
+    if ! command -v python3.11 &> /dev/null; then
+        echo "Python 3.11 not found. Installing..."
+        if command -v apt &> /dev/null; then
+            # Debian/Ubuntu
+            sudo apt update
+            sudo apt install -y software-properties-common
+            sudo add-apt-repository -y ppa:deadsnakes/ppa
+            sudo apt update
+            sudo apt install -y python3.11 python3.11-venv python3.11-dev
+        elif command -v yum &> /dev/null; then
+            # CentOS/RHEL
+            sudo yum install -y epel-release
+            sudo yum install -y python3.11 python3.11-devel
+        else
+            echo "Unsupported package manager. Please install Python 3.11 manually."
+            exit 1
+        fi
+    fi
+}
+
+# Check if Python 3.11 is installed, if not install it
+install_python311
+
+# Remove existing virtual environment if it exists
+if [ -d "venv" ]; then
+    echo "Removing existing virtual environment..."
+    rm -rf venv
 fi
 
-# Create and activate virtual environment (optional but recommended)
-echo "Creating virtual environment..."
-python3 -m venv venv || {
-    echo "Failed to create virtual environment. Continuing without it..."
+# Create new virtual environment with Python 3.11
+echo "Creating virtual environment with Python 3.11..."
+python3.11 -m venv venv || {
+    echo "Failed to create virtual environment with Python 3.11. Please check the installation."
+    exit 1
 }
 
-# Try to activate virtual environment, continue if it fails
+# Activate virtual environment
+echo "Activating virtual environment..."
 source venv/bin/activate || {
-    echo "Continuing without virtual environment..."
+    echo "Failed to activate virtual environment."
+    exit 1
 }
+
+# Upgrade pip
+echo "Upgrading pip..."
+pip install --upgrade pip
 
 # Install required packages
 echo "Installing required packages..."
-pip install numpy networkx matplotlib seaborn tqdm cython
+pip install numpy==1.26.3  # Specific version known to work with Python 3.11
+pip install networkx==3.2.1
+pip install matplotlib==3.8.2
+pip install seaborn==0.13.1
+pip install tqdm==4.66.1
+pip install cython==3.0.8
+pip install setuptools==69.0.3
 
 # Check if twitter_combined.txt exists
 if [ ! -f "data/twitter_combined.txt" ]; then
@@ -36,15 +74,23 @@ fi
 
 # Compile Cython code
 echo "Compiling Cython code..."
-python3 setup.py build_ext --inplace
+python setup.py build_ext --inplace
 
 # Run the analysis
 echo "Running Twitter network analysis..."
-python3 run_twitter_analysis.py data/twitter_combined.txt
+python run_twitter_analysis.py data/twitter_combined.txt
 
 echo "Analysis complete! Check the network_analysis_cy_* directory for results."
 
-# Deactivate virtual environment if it was activated
-if [ -d "venv" ]; then
-    deactivate || true
-fi
+# Deactivate virtual environment
+deactivate
+
+# Cleanup build artifacts (optional)
+echo "Cleaning up build artifacts..."
+rm -rf build/
+find . -type f -name "*.so" -o -name "*.c" | while read f; do
+    echo "Removing: $f"
+    rm "$f"
+done
+
+echo "Setup and analysis completed successfully!"

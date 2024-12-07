@@ -41,45 +41,7 @@ def read_network_cy(str filename):
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def parallel_edge_betweenness_centrality(G, int num_workers=4):
-    cdef:
-        dict edge_betweenness = {}
-        list nodes = list(G.nodes())
-        int n_nodes = len(nodes)
-        int chunk_size
-    
-    chunk_size = max(1, n_nodes // num_workers)
-    node_chunks = [nodes[i:i + chunk_size] for i in range(0, n_nodes, chunk_size)]
-    
-    def process_chunk(nodes_chunk):
-        local_betweenness = {}
-        for s in nodes_chunk:
-            pred, sigma, d = _single_source_shortest_path_basic(G, s)
-            betweenness = _accumulate_edges(G, s, pred, sigma, d)
-            for edge, value in betweenness.items():
-                if edge not in local_betweenness:
-                    local_betweenness[edge] = 0.0
-                local_betweenness[edge] += value
-        return local_betweenness
-    
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        chunk_results = list(executor.map(process_chunk, node_chunks))
-    
-    for chunk_result in chunk_results:
-        for edge, value in chunk_result.items():
-            if edge not in edge_betweenness:
-                edge_betweenness[edge] = 0.0
-            edge_betweenness[edge] += value
-    
-    cdef float scale = 1.0 / (n_nodes * (n_nodes - 1))
-    for edge in edge_betweenness:
-        edge_betweenness[edge] *= scale
-    
-    return edge_betweenness
-
-@cython.boundscheck(False)
-@cython.wraparound(False)
-cdef _single_source_shortest_path_basic(G, s):
+def _single_source_shortest_path_basic(G, s):
     cdef:
         dict pred = {s: []}
         dict sigma = {}
@@ -105,7 +67,7 @@ cdef _single_source_shortest_path_basic(G, s):
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-cdef _accumulate_edges(G, s, dict pred, dict sigma, dict d):
+def _accumulate_edges(G, s, dict pred, dict sigma, dict d):
     cdef:
         dict betweenness = {}
         dict delta = {}
@@ -125,6 +87,49 @@ cdef _accumulate_edges(G, s, dict pred, dict sigma, dict d):
             betweenness[edge] += c
     
     return betweenness
+
+# Moved process_chunk outside to be a top-level function
+def process_chunk(args):
+    G, nodes_chunk = args
+    local_betweenness = {}
+    for s in nodes_chunk:
+        pred, sigma, d = _single_source_shortest_path_basic(G, s)
+        betweenness = _accumulate_edges(G, s, pred, sigma, d)
+        for edge, value in betweenness.items():
+            if edge not in local_betweenness:
+                local_betweenness[edge] = 0.0
+            local_betweenness[edge] += value
+    return local_betweenness
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def parallel_edge_betweenness_centrality(G, int num_workers=4):
+    cdef:
+        dict edge_betweenness = {}
+        list nodes = list(G.nodes())
+        int n_nodes = len(nodes)
+        int chunk_size
+    
+    chunk_size = max(1, n_nodes // num_workers)
+    node_chunks = [nodes[i:i + chunk_size] for i in range(0, n_nodes, chunk_size)]
+    
+    # Create argument tuples for process_chunk
+    chunk_args = [(G, chunk) for chunk in node_chunks]
+    
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        chunk_results = list(executor.map(process_chunk, chunk_args))
+    
+    for chunk_result in chunk_results:
+        for edge, value in chunk_result.items():
+            if edge not in edge_betweenness:
+                edge_betweenness[edge] = 0.0
+            edge_betweenness[edge] += value
+    
+    cdef float scale = 1.0 / (n_nodes * (n_nodes - 1))
+    for edge in edge_betweenness:
+        edge_betweenness[edge] *= scale
+    
+    return edge_betweenness
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
