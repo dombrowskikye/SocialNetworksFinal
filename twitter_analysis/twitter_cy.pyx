@@ -14,10 +14,12 @@ import time
 import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
+from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor
 
 # Type declarations
-ctypedef np.int_t DTYPE_t
-ctypedef np.float64_t DTYPE_float_t
+ctypedef np.npy_int DTYPE_t
+ctypedef np.npy_float64 DTYPE_float_t
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
@@ -36,6 +38,112 @@ def read_twitter_network_cy(str filename):
                     continue
     
     return nx.DiGraph(edges)
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def parallel_edge_betweenness_centrality(G, int num_workers=4):
+    cdef:
+        dict edge_betweenness = defaultdict(float)
+        list nodes = list(G.nodes())
+        int n_nodes = len(nodes)
+        int chunk_size
+    
+    chunk_size = max(1, n_nodes // num_workers)
+    node_chunks = [nodes[i:i + chunk_size] for i in range(0, n_nodes, chunk_size)]
+    
+    def process_chunk(nodes_chunk):
+        chunk_betweenness = defaultdict(float)
+        for s in nodes_chunk:
+            pred, sigma, d = _single_source_shortest_path_basic(G, s)
+            betweenness = _accumulate_edges(G, s, pred, sigma, d)
+            for edge, value in betweenness.items():
+                chunk_betweenness[edge] += value
+        return dict(chunk_betweenness)
+    
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        chunk_results = list(executor.map(process_chunk, node_chunks))
+    
+    for chunk_result in chunk_results:
+        for edge, value in chunk_result.items():
+            edge_betweenness[edge] += value
+    
+    cdef float scale = 1.0 / (n_nodes * (n_nodes - 1))
+    for edge in edge_betweenness:
+        edge_betweenness[edge] *= scale
+    
+    return dict(edge_betweenness)
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+cdef _single_source_shortest_path_basic(G, s):
+    cdef:
+        dict pred = {s: []}
+        dict sigma = defaultdict(float)
+        dict d = {s: 0}
+        list queue = [s]
+        int v, w
+    
+    sigma[s] = 1.0
+    while queue:
+        v = queue.pop(0)
+        for w in G[v]:
+            if w not in d:
+                queue.append(w)
+                d[w] = d[v] + 1
+            if d[w] == d[v] + 1:
+                sigma[w] += sigma[v]
+                if w not in pred:
+                    pred[w] = []
+                pred[w].append(v)
+    
+    return pred, dict(sigma), d
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+cdef _accumulate_edges(G, s, dict pred, dict sigma, dict d):
+    cdef:
+        dict betweenness = defaultdict(float)
+        dict delta = defaultdict(float)
+        list stack = sorted(pred.keys(), key=lambda x: -d[x])
+    
+    for w in stack:
+        coefficient = (1.0 + delta[w]) / sigma[w]
+        for v in pred[w]:
+            edge = tuple(sorted([v, w]))
+            c = sigma[v] * coefficient
+            delta[v] += c
+            betweenness[edge] += c
+    
+    return dict(betweenness)
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def parallel_girvan_newman(G, max_communities=None, int num_workers=4):
+    cdef:
+        int n_communities = -1
+    
+    if max_communities is not None:
+        n_communities = max_communities
+        
+    if not isinstance(G, nx.Graph):
+        G = G.to_undirected()
+    
+    g = G.copy()
+    removed_edges = []
+    
+    with tqdm(total=g.number_of_edges(), desc="Detecting communities") as pbar:
+        while g.number_of_edges() > 0:
+            edge_betweenness = parallel_edge_betweenness_centrality(g, num_workers)
+            max_edge = max(edge_betweenness.items(), key=lambda x: x[1])[0]
+            g.remove_edge(*max_edge)
+            removed_edges.append(max_edge)
+            pbar.update(1)
+            
+            communities = list(nx.connected_components(g))
+            if n_communities > 0 and len(communities) >= n_communities:
+                break
+    
+    return communities, removed_edges
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
@@ -151,11 +259,15 @@ def plot_network_visualization_cy(G, dict bt_centrality, list communities, outpu
     plt.savefig(output_dir / 'network_visualization.png', dpi=150, bbox_inches='tight')
     plt.close()
 
-def analyze_network_cy(str filename):
+def analyze_network_cy(str filename, str community_method="girvan_newman", max_communities=None):
     cdef:
         float start_time = time.time()
         dict bt_centrality
         list communities
+        int n_communities = -1
+    
+    if max_communities is not None:
+        n_communities = max_communities
     
     print("Starting Cython-optimized analysis...")
     output_dir = create_output_directory()
@@ -182,8 +294,16 @@ def analyze_network_cy(str filename):
     
     print("\nDetecting communities...")
     comm_start = time.time()
-    communities = list(nx.community.greedy_modularity_communities(G.to_undirected()))
+    if community_method == "girvan_newman":
+        communities, removed_edges = parallel_girvan_newman(G.to_undirected(), n_communities)
+        # Save removed edges for potential reconstruction
+        with open(output_dir / 'removed_edges.pickle', 'wb') as f:
+            pickle.dump(removed_edges, f)
+    else:
+        communities = list(nx.community.greedy_modularity_communities(G.to_undirected()))
+    
     print(f"Communities detected in {time.time() - comm_start:.2f} seconds")
+    print(f"Number of communities found: {len(communities)}")
     
     with open(output_dir / 'communities.pickle', 'wb') as f:
         pickle.dump(communities, f)
