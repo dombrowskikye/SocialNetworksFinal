@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# Twitter Analysis Setup and Run Script
+# Facebook Analysis Setup and Run Script
 
 # Make sure script stops on any error
 set -e
 
-echo "Setting up Twitter Network Analysis Environment..."
+echo "Setting up Facebook Network Analysis Environment..."
 
 # Check if python and pip are installed
 if ! command -v python3 &> /dev/null; then
@@ -26,11 +26,11 @@ source venv/bin/activate || {
 
 # Install required packages
 echo "Installing required packages..."
-pip install numpy networkx matplotlib seaborn tqdm cython
+pip install numpy networkx matplotlib seaborn tqdm cython setuptools
 
 # Check if twitter_combined.txt exists
-if [ ! -f "data/twitter_combined.txt" ]; then
-    echo "Error: twitter_combined.txt not found in data directory!"
+if [ ! -f "data/facebook_combined.txt" ]; then
+    echo "Error: facebook_combined.txt not found in data directory!"
     exit 1
 fi
 
@@ -39,8 +39,8 @@ echo "Compiling Cython code..."
 python3 setup.py build_ext --inplace
 
 # Run the analysis
-echo "Running Twitter network analysis..."
-python3 run_analysis.py data/twitter_combined.txt
+echo "Running Facebook network analysis..."
+python3 run_facebook_analysis.py data/facebook_combined.txt
 
 echo "Analysis complete! Check the network_analysis_cy_* directory for results."
 

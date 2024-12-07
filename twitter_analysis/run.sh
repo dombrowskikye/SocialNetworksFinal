@@ -40,7 +40,7 @@ python3 setup.py build_ext --inplace
 
 # Run the analysis
 echo "Running Twitter network analysis..."
-python3 run_analysis.py data/twitter_combined.txt
+python3 run_twitter_analysis.py data/twitter_combined.txt
 
 echo "Analysis complete! Check the network_analysis_cy_* directory for results."
 
