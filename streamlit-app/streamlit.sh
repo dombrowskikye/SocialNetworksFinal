@@ -3,6 +3,7 @@
 # Network Analysis Setup and Run Script
 
 # Make sure script stops on any error
+# run chmod +x streamlit.sh; ./streamlit.sh
 set -e
 
 echo "Setting up Network Analysis Environment..."
